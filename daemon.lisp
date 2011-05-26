@@ -22,7 +22,7 @@
 (defconstant +default-mode+ #o600)
 
 (defun daemonize (&key input output error (umask +default-mask+)
-                       pidfile exit-parent)
+                       pidfile exit-parent disable-debugger)
   "Forks off a daemonized child process. If PIDFILE is provided, it is
 deleted before forking, and the child writes its PID in there after
 forking. If EXIT-PARENT is true, the parent process exits after
@@ -58,6 +58,9 @@ Possible values are:
   handling, and closed in parent afterwards.
 
 UMASK specifies the umask for the child process. Default is #o022.
+
+If DISABLE-DEBUGGER is true, the debugger is turned off in the
+child process: any unhandled error terminates the process.
 "
   (declare
    (type (or null string pathname) directory pidfile)
@@ -87,6 +90,8 @@ UMASK specifies the umask for the child process. Default is #o022.
         (sb-posix:close out)
         (sb-posix:close err)
         (return-from daemonize pid)))
+    (when disable-debugger
+      (sb-ext:disable-debugger))
     ;; The only safe place to be.
     (sb-posix:chdir "/")
     ;; Throw away the old *TTY* stream.
