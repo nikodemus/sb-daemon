@@ -23,11 +23,12 @@
 
 (defun daemonize (&key input output error (umask +default-mask+)
                        pidfile exit-parent disable-debugger)
-  "Forks off a daemonized child process. If PIDFILE is provided, it is
-deleted before forking, and the child writes its PID in there after
-forking. If EXIT-PARENT is true, the parent process exits after
-forking, otherwise DAEMONIZE returns the PID of the child process in
-parent, and NIL in child.
+  "Forks off a daemonized child process.
+
+If PIDFILE is provided, it is deleted before forking, and the child
+writes its PID in there after forking. Returns NIL in the child. If
+EXIT-PARENT is true, the parent process exits after forking, otherwise
+the PID of the child process is returned in parent.
 
 The child changes its current working directory to /, but
 *DEFAULT-PATHNAME-DEFAULTS* is unaffected.
@@ -50,16 +51,16 @@ Possible values are:
   where PATHNAME must be a pathname designator. If MKFIFO is true,
   a FIFO is created with the specied name and then opened. Otherwise
   a normal file is opened in the specified manner. If CREATE is true
-  (default), and neither APPEND nor TRUNCATE is specified, the
-  an error is signaled if the file already exists. MODE is the mode
-  to use for the file if it is created, defaulting to #o600.
+  (default), and neither APPEND nor TRUNCATE is specified, an error is
+  signaled if the file already exists. MODE is the mode to use for the
+  file if it is created, defaulting to #o600.
 
   In all cases the files are opened before forking for easier error
   handling, and closed in parent afterwards.
 
 UMASK specifies the umask for the child process. Default is #o022.
 
-If DISABLE-DEBUGGER is true, the debugger is turned off in the
+If DISABLE-DEBUGGER is true, SBCL's debugger is turned off in the
 child process: any unhandled error terminates the process.
 "
   (declare
