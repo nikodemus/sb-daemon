@@ -110,9 +110,9 @@ UMASK specifies the umask for the child process. Default is #o022.
 (defun open-fd (use spec)
   (if (eq spec t)
       (ecase use
-        (:input 0)
-        (:output 1)
-        (:error 2))
+        (:input (sb-posix:dup 0))
+        (:output (sb-posix:dup 1))
+        (:error (sb-posix:dup 2)))
       (multiple-value-bind (name flags mode)
           (etypecase spec
             (null
