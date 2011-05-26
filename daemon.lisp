@@ -21,13 +21,16 @@
 (defconstant +default-mask+ #o022)
 (defconstant +default-mode+ #o600)
 
-(defun daemonize (&key input output error directory (umask +default-mask+)
+(defun daemonize (&key input output error (umask +default-mask+)
                        pidfile exit-parent)
   "Forks off a daemonized child process. If PIDFILE is provided, it is
 deleted before forking, and the child writes its PID in there after
 forking. If EXIT-PARENT is true, the parent process exits after
 forking, otherwise DAEMONIZE returns the PID of the child process in
 parent, and NIL in child.
+
+The child changes its current working directory to /, but
+*DEFAULT-PATHNAME-DEFAULTS* is unaffected.
 
 INPUT, OUTPUT, and ERROR designate files to which the child process
 should connect its stdin, stdout, and stderr file descriptors.
@@ -54,10 +57,6 @@ Possible values are:
   In all cases the files are opened before forking for easier error
   handling, and closed in parent afterwards.
 
-DIRECTORY specifies the directory which is made the current working
-directory of the both child /and/ parent -- this is done prior to
-forking for easier error handling. DIRECTORY defaults to /.
-
 UMASK specifies the umask for the child process. Default is #o022.
 "
   (declare
@@ -75,7 +74,6 @@ UMASK specifies the umask for the child process. Default is #o022.
       (check-fd 2 'sb-sys:*stderr*))
   (when pidfile
     (ignore-errors (delete-file pidfile)))
-  (sb-posix:chdir (pathname (or directory "/")))
   (let ((in (open-fd :input input))
         (out (open-fd :output output))
         (err (open-fd :error error)))
@@ -89,6 +87,8 @@ UMASK specifies the umask for the child process. Default is #o022.
         (sb-posix:close out)
         (sb-posix:close err)
         (return-from daemonize pid)))
+    ;; The only safe place to be.
+    (sb-posix:chdir "/")
     ;; Throw away the old *TTY* stream.
     (let ((tty sb-sys:*tty*))
       (when (typep tty 'sb-sys:fd-stream)
