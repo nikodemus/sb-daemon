@@ -109,11 +109,25 @@ used.
         (int (make-handler :sigint sigint)))
     ;; Most of the error-prone stuff is out of the way, time to fork. Disable
     ;; interrupts before forking, so that we can put exit-hooks into place
-    ;; before the SIGCHLD can be delivered.
+    ;; before the SIGCHLD can be delivered, and similarly on the child side.
     (sb-sys:without-interrupts
       (let ((pid (sb-posix:fork)))
         (cond ((zerop pid)
-               ;; Child
+               ;; Child.
+               (let ((tty sb-sys:*tty*))
+                 (when (typep tty 'sb-sys:fd-stream)
+                   ;; Throw away the old *TTY* stream.
+                   (close tty)
+                   (setf sb-sys:*tty* (make-two-way-stream sb-sys:*stdin*
+                                                           sb-sys:*stdout*))))
+               (sb-posix:chdir "/")
+               (sb-posix:setsid)
+               (sb-posix:umask umask)
+               (sb-posix:dup2 in 0)
+               (sb-posix:dup2 out 1)
+               (sb-posix:dup2 err 2)
+               (when disable-debugger
+                 (sb-ext:disable-debugger))
                (when term
                  (sb-sys:enable-interrupt sb-posix:sigterm term))
                (when abrt
@@ -133,22 +147,6 @@ used.
                    (let ((hook (unless (eq t exit-hook) exit-hook)))
                      (push (cons pid hook) **daemon-children**))))
                (return-from daemonize pid)))))
-    (when disable-debugger
-      (sb-ext:disable-debugger))
-    ;; The only safe place to be.
-    (sb-posix:chdir "/")
-    ;; Throw away the old *TTY* stream.
-    (let ((tty sb-sys:*tty*))
-      (when (typep tty 'sb-sys:fd-stream)
-        (close tty)
-        (setf sb-sys:*tty* (make-two-way-stream sb-sys:*stdin*
-                                                sb-sys:*stdout*))))
-    ;; Rest of the setup.
-    (sb-posix:setsid)
-    (sb-posix:umask umask)
-    (sb-posix:dup2 in 0)
-    (sb-posix:dup2 out 1)
-    (sb-posix:dup2 err 2)
     (when pidfile
       (with-open-file (f pidfile :direction :output
                                  :if-exists :supersede)
