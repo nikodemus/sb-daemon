@@ -21,14 +21,29 @@
 (defconstant +default-mask+ #o022)
 (defconstant +default-mode+ #o600)
 
+(sb-ext:defglobal **daemon-children** nil)
+(sb-ext:defglobal **daemon-lock** (sb-thread:make-mutex :name "Daemon Lock"))
+
 (defun daemonize (&key input output error (umask +default-mask+)
-                       pidfile exit-parent disable-debugger)
+                       pidfile exit-parent (exit-hook t) disable-debugger)
   "Forks off a daemonized child process.
 
 If PIDFILE is provided, it is deleted before forking, and the child
-writes its PID in there after forking. Returns NIL in the child. If
-EXIT-PARENT is true, the parent process exits after forking, otherwise
-the PID of the child process is returned in parent.
+writes its PID in there after forking. Returns NIL in the child.
+
+For complete daemonization use EXIT-PARENT, which causes the parent process to
+exit after forking, otherwise the PID of the child process is returned in
+parent. When EXIT-PARENT is used, the parent exits without unwinding or
+running SB-EXT:*EXIT-HOOKS*.
+
+When EXIT-PARENT is false (the default), EXIT-HOOK can be used to record
+child's exit. It will be called asynchronously with three arguments: the pid
+of the child, the manner of child's termination (:EXIT or :SIGNAL), and the
+child's exit code or signal number that caused termination. The default exit
+handler T will merely reap the child process so it will not remain in
+zombiefied state. Users wanting to reap the child manually (via eg.
+SB-POSIX:WAITPID) must explicitly provide NIL as the EXIT-HOOK to prevent
+automatic reaping.
 
 The child changes its current working directory to /, but
 *DEFAULT-PATHNAME-DEFAULTS* is unaffected.
@@ -64,33 +79,40 @@ If DISABLE-DEBUGGER is true, SBCL's debugger is turned off in the
 child process: any unhandled error terminates the process.
 "
   (declare
-   (type (or null string pathname) directory pidfile)
+   (type (or null string pathname) pidfile)
    (type (unsigned-byte 32) umask))
   ;; Sanity checking.
   (flet ((check-fd (fd name)
-             (let ((stream (symbol-value name)))
-               (unless (and (typep stream 'sb-sys:fd-stream)
-                            (= fd (sb-sys:fd-stream-fd stream)))
-                 (error "~S should be an FD-STREAM on ~S"
-                        name fd)))))
-      (check-fd 0 'sb-sys:*stdin*)
-      (check-fd 1 'sb-sys:*stdout*)
-      (check-fd 2 'sb-sys:*stderr*))
+           (let ((stream (symbol-value name)))
+             (unless (and (typep stream 'sb-sys:fd-stream)
+                          (= fd (sb-sys:fd-stream-fd stream)))
+               (error "~S should be an FD-STREAM on ~S"
+                      name fd)))))
+    (check-fd 0 'sb-sys:*stdin*)
+    (check-fd 1 'sb-sys:*stdout*)
+    (check-fd 2 'sb-sys:*stderr*))
   (when pidfile
     (ignore-errors (delete-file pidfile)))
   (let ((in (open-fd :input input))
         (out (open-fd :output output))
         (err (open-fd :error error)))
-    ;; Most of the error-prone stuff is out of the way,
-    ;; time to fork.
-    (let ((pid (sb-posix:fork)))
-      (unless (zerop pid)
-        (when exit-parent
-          (sb-ext:quit :unix-status 0 :recklessly-p t))
-        (sb-posix:close in)
-        (sb-posix:close out)
-        (sb-posix:close err)
-        (return-from daemonize pid)))
+    ;; Most of the error-prone stuff is out of the way, time to fork. Disable
+    ;; interrupts before forking, so that we can put exit-hooks into place
+    ;; before the SIGCHLD can be delivered.
+    (sb-sys:without-interrupts
+      (let ((pid (sb-posix:fork)))
+        (unless (zerop pid)
+          (when exit-parent
+            (sb-ext:quit :unix-status 0 :recklessly-p t))
+          (sb-posix:close in)
+          (sb-posix:close out)
+          (sb-posix:close err)
+          (when exit-hook
+            (sb-thread:with-mutex (**daemon-lock**)
+              (%enable-sigchld-handler)
+              (let ((hook (unless (eq t exit-hook) exit-hook)))
+                (push (cons pid hook) **daemon-children**))))
+          (return-from daemonize pid))))
     (when disable-debugger
       (sb-ext:disable-debugger))
     ;; The only safe place to be.
@@ -110,7 +132,7 @@ child process: any unhandled error terminates the process.
     (when pidfile
       (with-open-file (f pidfile :direction :output
                                  :if-exists :supersede)
-        (format f "~A~%" (sb-posix:getpid)))))  
+        (format f "~A~%" (sb-posix:getpid)))))
   nil)
 
 (defun open-fd (use spec)
@@ -154,3 +176,50 @@ child process: any unhandled error terminates the process.
                                       name use flags mode)
             (return-from open-fd
               (sb-posix:open name (logior sb-posix:o-rdwr flags) mode)))))))
+
+;;; SBCL has a SIGCHLD handler for RUN-PROGRAM already -- and there could be
+;;; others as well, so we daisy-chain.
+(sb-ext:defglobal **previous-sigchld-handler** nil)
+
+(defun handle-sigchld (signal info context)
+  (let (exited)
+    (sb-thread:with-mutex (**daemon-lock**)
+      (setf **daemon-children**
+            (delete-if (lambda (child)
+                         (handler-case
+                             (multiple-value-bind (pid status)
+                                 ;; KLUDGE: doublecolon as SBCL's older than
+                                 ;; 1.0.48.26 don't export WNOHANG. Ignore err
+                                 (sb-posix:waitpid (car child) sb-posix::wnohang)
+                               (when (plusp pid)
+                                 (when (cdr child)
+                                   (let (reason code)
+                                     (cond ((sb-posix:wifexited status)
+                                            (setf reason :exit
+                                                  code (sb-posix:wexitstatus status)))
+                                           ((sb-posix:wifsignaled status)
+                                            (setf reason :signal
+                                                  code (sb-posix:wtermsig status))))
+                                     (push (list (cdr child) pid reason code) exited)))
+                                 t))
+                           (sb-posix:syscall-error ()
+                             ;; Someone else already reaped it?
+                             t)))
+                       **daemon-children**)))
+    (dolist (exit exited)
+      (handler-case
+          (sb-sys:with-interrupts (apply (first exit) (rest exit)))
+        (serious-condition (c)
+          (warn "Exit hook ~S for daemon child (pid ~S) had trouble:~%  ~A"
+                (first exit) (second exit) c)))))
+  ;; Next.
+  (funcall **previous-sigchld-handler** signal info context))
+
+(defun %enable-sigchld-handler ()
+  (unless **previous-sigchld-handler**
+    (setf **previous-sigchld-handler**
+          (sb-sys:enable-interrupt sb-posix:sigchld
+                                   ;; Trampoline so that HANDLE-SIGCHLD can be
+                                   ;; redefined.
+                                   (lambda (signal info conext)
+                                     (handle-sigchld signal info context))))))
