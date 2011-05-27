@@ -26,6 +26,7 @@
 
 (defun daemonize (&key input output error (umask +default-mask+) pidfile
                        exit-parent (exit-hook t) (disable-debugger t)
+                       user group
                        sigabrt sighup sigint sigterm)
   "Forks off a daemonized child process.
 
@@ -85,10 +86,15 @@ used to indicate that the signal should be ignored or that the default
 OS handler should be used. Otherwise the handler should be a function
 which will be called with a keyword indicating the signal. If they are
 not provided, the currently installed handlers are used.
+
+USER and GROUP can be used to drop privileges: user id is get using
+setuid() to USER's uid, and correspondingly for GROUP with setgid().
+USER and GROUP can either be specified as numeric ids, or as strings.
 "
   (declare
    (type (or null string pathname) pidfile)
-   (type (unsigned-byte 32) umask))
+   (type (unsigned-byte 32) umask)
+   (type (or null string unsigned-byte) user))
   ;; Sanity checking.
   (flet ((check-fd (fd name)
            (let ((stream (symbol-value name)))
@@ -107,7 +113,25 @@ not provided, the currently installed handlers are used.
         (term (make-handler :sigterm sigterm))
         (abrt (make-handler :sigabrt sigabrt))
         (int (make-handler :sigint sigint))
-        (hup (make-handler :sighup sighup)))
+        (hup (make-handler :sighup sighup))
+        (uid (typecase user
+               (string
+                (sb-posix:passwd-uid
+                 (or (sb-posix:getpwnam user)
+                     (error "Unknown username: ~S" user))))
+               (unsigned-byte
+                (if (sb-posix:getpwuid user)
+                    user
+                    (error "Unknown userid: ~S" user)))))
+        (gid (typecase group
+               (string
+                (sb-posix:group-gid
+                 (or (sb-posix:getgrnam group)
+                     (error "Unknown group name: ~S" group))))
+               (unsigned-byte
+                (if (sb-posix:getgrgid group)
+                    group
+                    (error "Unknown group id: ~S" group))))))
     ;; Most of the error-prone stuff is out of the way, time to fork. Disable
     ;; interrupts before forking, so that we can put exit-hooks into place
     ;; before the SIGCHLD can be delivered, and similarly on the child side.
@@ -132,7 +156,11 @@ not provided, the currently installed handlers are used.
                (set-handler sb-posix:sigabrt abrt)
                (set-handler sb-posix:sighup hup)
                (set-handler sb-posix:sigint int)
-               (set-handler sb-posix:sigterm term))
+               (set-handler sb-posix:sigterm term)
+               (when uid
+                 (sb-posix:setuid uid))
+               (when gid
+                 (sb-posix:setgid gid)))
               (t
                ;; Parent
                (when exit-parent
