@@ -221,5 +221,5 @@ child process: any unhandled error terminates the process.
           (sb-sys:enable-interrupt sb-posix:sigchld
                                    ;; Trampoline so that HANDLE-SIGCHLD can be
                                    ;; redefined.
-                                   (lambda (signal info conext)
+                                   (lambda (signal info context)
                                      (handle-sigchld signal info context))))))
