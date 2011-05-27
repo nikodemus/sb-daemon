@@ -24,8 +24,8 @@
 (sb-ext:defglobal **daemon-children** nil)
 (sb-ext:defglobal **daemon-lock** (sb-thread:make-mutex :name "Daemon Lock"))
 
-(defun daemonize (&key input output error (umask +default-mask+)
-                       pidfile exit-parent (exit-hook t) disable-debugger
+(defun daemonize (&key input output error (umask +default-mask+) pidfile
+                       exit-parent (exit-hook t) (disable-debugger t)
                        sigterm sigabrt sigint)
   "Forks off a daemonized child process.
 
@@ -76,11 +76,11 @@ Possible values are:
 
 UMASK specifies the umask for the child process. Default is #o022.
 
-If DISABLE-DEBUGGER is true, SBCL's debugger is turned off in the
+If DISABLE-DEBUGGER is true (default), SBCL's debugger is turned off in the
 child process: any unhandled error terminates the process.
 
 SIGTERM, SIGABRT, and SIGINT can be used to specify alternative handlers for
-those signale. :IGNORE and :DEFAULT can be used to indicate that the signal
+those signals. :IGNORE and :DEFAULT can be used to indicate that the signal
 should be ignored or that the default OS handler should be used. Otherwise the
 handler should be a function which will be called with a keyword indicating
 the signal. If they are not provided, the currently installed handlers are
