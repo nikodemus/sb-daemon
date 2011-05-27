@@ -1,3 +1,6 @@
 SB-DAEMON
 
 Process daemonization for SBCL.
+
+SB-DAEMON:DAEMONIZE forks off a daemonized subprocess. See docstring
+for details.

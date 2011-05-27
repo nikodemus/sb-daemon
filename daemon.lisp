@@ -26,7 +26,7 @@
 
 (defun daemonize (&key input output error (umask +default-mask+) pidfile
                        exit-parent (exit-hook t) (disable-debugger t)
-                       sigterm sigabrt sigint)
+                       sigabrt sighup sigint sigterm)
   "Forks off a daemonized child process.
 
 If PIDFILE is provided, it is deleted before forking, and the child
@@ -79,12 +79,12 @@ UMASK specifies the umask for the child process. Default is #o022.
 If DISABLE-DEBUGGER is true (default), SBCL's debugger is turned off in the
 child process: any unhandled error terminates the process.
 
-SIGTERM, SIGABRT, and SIGINT can be used to specify alternative handlers for
-those signals. :IGNORE and :DEFAULT can be used to indicate that the signal
-should be ignored or that the default OS handler should be used. Otherwise the
-handler should be a function which will be called with a keyword indicating
-the signal. If they are not provided, the currently installed handlers are
-used.
+SIGABRT, SIGHUP, SIGINT, and SIGTERM can be used to specify
+alternative handlers for those signals. :IGNORE and :DEFAULT can be
+used to indicate that the signal should be ignored or that the default
+OS handler should be used. Otherwise the handler should be a function
+which will be called with a keyword indicating the signal. If they are
+not provided, the currently installed handlers are used.
 "
   (declare
    (type (or null string pathname) pidfile)
@@ -106,7 +106,8 @@ used.
         (err (open-fd :error error))
         (term (make-handler :sigterm sigterm))
         (abrt (make-handler :sigabrt sigabrt))
-        (int (make-handler :sigint sigint)))
+        (int (make-handler :sigint sigint))
+        (hup (make-handler :sighup sighup)))
     ;; Most of the error-prone stuff is out of the way, time to fork. Disable
     ;; interrupts before forking, so that we can put exit-hooks into place
     ;; before the SIGCHLD can be delivered, and similarly on the child side.
@@ -128,12 +129,10 @@ used.
                (sb-posix:dup2 err 2)
                (when disable-debugger
                  (sb-ext:disable-debugger))
-               (when term
-                 (sb-sys:enable-interrupt sb-posix:sigterm term))
-               (when abrt
-                 (sb-sys:enable-interrupt sb-posix:sigabrt abrt))
-               (when int
-                 (sb-sys:enable-interrupt sb-posix:sigint int))               )
+               (set-handler sb-posix:sigabrt abrt)
+               (set-handler sb-posix:sighup hup)
+               (set-handler sb-posix:sigint int)
+               (set-handler sb-posix:sigterm term))
               (t
                ;; Parent
                (when exit-parent
@@ -195,6 +194,9 @@ used.
             (return-from open-fd
               (sb-posix:open name (logior sb-posix:o-rdwr flags) mode)))))))
 
+(defun set-handler (signo handler)
+  (when handler
+    (sb-sys:enable-interrupt signo handler)))
 
 (defun make-handler (name spec)
   (cond ((member spec '(nil :default :ignore))
