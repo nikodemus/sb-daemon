@@ -25,7 +25,8 @@
 (sb-ext:defglobal **daemon-lock** (sb-thread:make-mutex :name "Daemon Lock"))
 
 (defun daemonize (&key input output error (umask +default-mask+)
-                       pidfile exit-parent (exit-hook t) disable-debugger)
+                       pidfile exit-parent (exit-hook t) disable-debugger
+                       sigterm sigabrt sigint)
   "Forks off a daemonized child process.
 
 If PIDFILE is provided, it is deleted before forking, and the child
@@ -77,6 +78,13 @@ UMASK specifies the umask for the child process. Default is #o022.
 
 If DISABLE-DEBUGGER is true, SBCL's debugger is turned off in the
 child process: any unhandled error terminates the process.
+
+SIGTERM, SIGABRT, and SIGINT can be used to specify alternative handlers for
+those signale. :IGNORE and :DEFAULT can be used to indicate that the signal
+should be ignored or that the default OS handler should be used. Otherwise the
+handler should be a function which will be called with a keyword indicating
+the signal. If they are not provided, the currently installed handlers are
+used.
 "
   (declare
    (type (or null string pathname) pidfile)
@@ -95,24 +103,36 @@ child process: any unhandled error terminates the process.
     (ignore-errors (delete-file pidfile)))
   (let ((in (open-fd :input input))
         (out (open-fd :output output))
-        (err (open-fd :error error)))
+        (err (open-fd :error error))
+        (term (make-handler :sigterm sigterm))
+        (abrt (make-handler :sigabrt sigabrt))
+        (int (make-handler :sigint sigint)))
     ;; Most of the error-prone stuff is out of the way, time to fork. Disable
     ;; interrupts before forking, so that we can put exit-hooks into place
     ;; before the SIGCHLD can be delivered.
     (sb-sys:without-interrupts
       (let ((pid (sb-posix:fork)))
-        (unless (zerop pid)
-          (when exit-parent
-            (sb-ext:quit :unix-status 0 :recklessly-p t))
-          (sb-posix:close in)
-          (sb-posix:close out)
-          (sb-posix:close err)
-          (when exit-hook
-            (sb-thread:with-mutex (**daemon-lock**)
-              (%enable-sigchld-handler)
-              (let ((hook (unless (eq t exit-hook) exit-hook)))
-                (push (cons pid hook) **daemon-children**))))
-          (return-from daemonize pid))))
+        (cond ((zerop pid)
+               ;; Child
+               (when term
+                 (sb-sys:enable-interrupt sb-posix:sigterm term))
+               (when abrt
+                 (sb-sys:enable-interrupt sb-posix:sigabrt abrt))
+               (when int
+                 (sb-sys:enable-interrupt sb-posix:sigint int))               )
+              (t
+               ;; Parent
+               (when exit-parent
+                 (sb-ext:quit :unix-status 0 :recklessly-p t))
+               (sb-posix:close in)
+               (sb-posix:close out)
+               (sb-posix:close err)
+               (when exit-hook
+                 (sb-thread:with-mutex (**daemon-lock**)
+                   (%enable-sigchld-handler)
+                   (let ((hook (unless (eq t exit-hook) exit-hook)))
+                     (push (cons pid hook) **daemon-children**))))
+               (return-from daemonize pid)))))
     (when disable-debugger
       (sb-ext:disable-debugger))
     ;; The only safe place to be.
@@ -176,6 +196,17 @@ child process: any unhandled error terminates the process.
                                       name use flags mode)
             (return-from open-fd
               (sb-posix:open name (logior sb-posix:o-rdwr flags) mode)))))))
+
+
+(defun make-handler (name spec)
+  (cond ((member spec '(nil :default :ignore))
+         spec)
+        ((or (symbolp spec) (functionp spec))
+         (lambda (signo context info)
+           (declare (ignore signo context info))
+           (funcall spec name)))
+        (t
+         (error "~S is not a valid value for ~S." spec name))))
 
 ;;; SBCL has a SIGCHLD handler for RUN-PROGRAM already -- and there could be
 ;;; others as well, so we daisy-chain.
