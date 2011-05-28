@@ -157,10 +157,10 @@ USER and GROUP can either be specified as numeric ids, or as strings.
                (set-handler sb-posix:sighup hup)
                (set-handler sb-posix:sigint int)
                (set-handler sb-posix:sigterm term)
-               (when uid
-                 (sb-posix:setuid uid))
                (when gid
-                 (sb-posix:setgid gid)))
+                 (sb-posix:setgid gid))
+               (when uid
+                 (sb-posix:setuid uid)))
               (t
                ;; Parent
                (when exit-parent
