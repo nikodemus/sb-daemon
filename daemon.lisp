@@ -142,7 +142,7 @@ USER and GROUP can either be specified as numeric ids, or as strings.
                (let ((tty sb-sys:*tty*))
                  (when (typep tty 'sb-sys:fd-stream)
                    ;; Throw away the old *TTY* stream.
-                   (close tty)
+                   (close tty :abort t)
                    (setf sb-sys:*tty* (make-two-way-stream sb-sys:*stdin*
                                                            sb-sys:*stdout*))))
                (sb-posix:chdir "/")
