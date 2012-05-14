@@ -18,5 +18,6 @@
 
 (defpackage :sb-daemon
   (:use :cl)
+  (:import-from :sb-alien #:define-alien-routine #:void #:int)
   (:export
    #:daemonize))

@@ -17,7 +17,7 @@
 ;;;; SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 (defsystem :sb-daemon
-  :version "0.1"
+  :version "0.2"
   :description "Process daemonization for SBCL."
   :depends-on (:sb-posix)
   :licence "MIT"

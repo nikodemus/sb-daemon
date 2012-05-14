@@ -24,6 +24,8 @@
 (sb-ext:defglobal **daemon-children** nil)
 (sb-ext:defglobal **daemon-lock** (sb-thread:make-mutex :name "Daemon Lock"))
 
+(define-alien-routine exit void (code int))
+
 (defun daemonize (&key input output error (umask +default-mask+) pidfile
                        exit-parent (exit-hook t) (disable-debugger t)
                        user group
@@ -43,7 +45,8 @@ child's exit. It will be called asynchronously with three arguments: the pid
 of the child, the manner of child's termination (:EXIT or :SIGNAL), and the
 child's exit code or signal number that caused termination. The default exit
 handler T will merely reap the child process so it will not remain in
-zombiefied state. Users wanting to reap the child manually (via eg.
+zombiefied state. Reaping will also performed automatically in presence of
+other exit hooks. Users wanting to reap the child manually (via eg.
 SB-POSIX:WAITPID) must explicitly provide NIL as the EXIT-HOOK to prevent
 automatic reaping.
 
@@ -94,7 +97,10 @@ USER and GROUP can either be specified as numeric ids, or as strings.
   (declare
    (type (or null string pathname) pidfile)
    (type (unsigned-byte 32) umask)
-   (type (or null string unsigned-byte) user))
+   (type (or null string unsigned-byte) user)
+   ;; Not much point, and silences compiler notes.
+   (notinline sb-posix:getgrnam sb-posix:getpwuid
+              sb-posix:getgrgid sb-posix:getpwnam))
   ;; Sanity checking.
   (flet ((check-fd (fd name)
            (let ((stream (symbol-value name)))
@@ -164,7 +170,7 @@ USER and GROUP can either be specified as numeric ids, or as strings.
               (t
                ;; Parent
                (when exit-parent
-                 (sb-ext:quit :unix-status 0 :recklessly-p t))
+                 (exit 0))
                (sb-posix:close in)
                (sb-posix:close out)
                (sb-posix:close err)
